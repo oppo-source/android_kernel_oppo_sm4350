@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2002,2007-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2002,2007-2020, The Linux Foundation. All rights reserved.
  */
 
 #include <linux/slab.h>
@@ -189,23 +189,6 @@ err:
 	return ret;
 }
 
-#ifdef CONFIG_TRACE_GPU_MEM
-static void kgsl_mmu_trace_gpu_mem_pagetable(struct kgsl_pagetable *pagetable)
-{
-	if (pagetable->name == KGSL_MMU_GLOBAL_PT ||
-		pagetable->name == KGSL_MMU_GLOBAL_LPAC_PT ||
-		pagetable->name == KGSL_MMU_SECURE_PT)
-		return;
-
-	trace_gpu_mem_total(0, pagetable->name,
-			(u64)atomic_long_read(&pagetable->stats.mapped));
-}
-#else
-static void kgsl_mmu_trace_gpu_mem_pagetable(struct kgsl_pagetable *pagetable)
-{
-}
-#endif
-
 void
 kgsl_mmu_detach_pagetable(struct kgsl_pagetable *pagetable)
 {
@@ -375,7 +358,6 @@ kgsl_mmu_map(struct kgsl_pagetable *pagetable,
 				struct kgsl_memdesc *memdesc)
 {
 	int size;
-	struct kgsl_device *device = KGSL_MMU_DEVICE(pagetable->mmu);
 
 	if (!memdesc->gpuaddr)
 		return -EINVAL;
@@ -396,12 +378,6 @@ kgsl_mmu_map(struct kgsl_pagetable *pagetable,
 		atomic_inc(&pagetable->stats.entries);
 		KGSL_STATS_ADD(size, &pagetable->stats.mapped,
 				&pagetable->stats.max_mapped);
-		kgsl_mmu_trace_gpu_mem_pagetable(pagetable);
-
-		if (!kgsl_memdesc_is_global(memdesc)
-				&& !(memdesc->flags & KGSL_MEMFLAGS_USERMEM_ION)) {
-			kgsl_trace_gpu_mem_total(device, size);
-		}
 
 		memdesc->priv |= KGSL_MEMDESC_MAPPED;
 	}
@@ -422,7 +398,7 @@ void kgsl_mmu_put_gpuaddr(struct kgsl_memdesc *memdesc)
 	if (memdesc->size == 0 || memdesc->gpuaddr == 0)
 		return;
 
-	if (!kgsl_memdesc_is_global(memdesc) && (KGSL_MEMDESC_MAPPED & memdesc->priv))
+	if (!kgsl_memdesc_is_global(memdesc))
 		unmap_fail = kgsl_mmu_unmap(pagetable, memdesc);
 
 	/*
@@ -468,7 +444,6 @@ kgsl_mmu_unmap(struct kgsl_pagetable *pagetable,
 		struct kgsl_memdesc *memdesc)
 {
 	int ret = 0;
-	struct kgsl_device *device = KGSL_MMU_DEVICE(pagetable->mmu);
 
 	if (memdesc->size == 0)
 		return -EINVAL;
@@ -486,13 +461,9 @@ kgsl_mmu_unmap(struct kgsl_pagetable *pagetable,
 
 		atomic_dec(&pagetable->stats.entries);
 		atomic_long_sub(size, &pagetable->stats.mapped);
-		kgsl_mmu_trace_gpu_mem_pagetable(pagetable);
 
-		if (!kgsl_memdesc_is_global(memdesc)) {
+		if (!kgsl_memdesc_is_global(memdesc))
 			memdesc->priv &= ~KGSL_MEMDESC_MAPPED;
-			if (!(memdesc->flags & KGSL_MEMFLAGS_USERMEM_ION))
-				kgsl_trace_gpu_mem_total(device, -(size));
-		}
 	}
 
 	return ret;
@@ -529,10 +500,10 @@ enum kgsl_mmutype kgsl_mmu_get_mmutype(struct kgsl_device *device)
 }
 
 bool kgsl_mmu_gpuaddr_in_range(struct kgsl_pagetable *pagetable,
-		uint64_t gpuaddr)
+		uint64_t gpuaddr, uint64_t size)
 {
 	if (PT_OP_VALID(pagetable, addr_in_range))
-		return pagetable->pt_ops->addr_in_range(pagetable, gpuaddr);
+		return pagetable->pt_ops->addr_in_range(pagetable, gpuaddr, size);
 
 	return false;
 }
@@ -544,7 +515,7 @@ bool kgsl_mmu_gpuaddr_in_range(struct kgsl_pagetable *pagetable,
  */
 
 static bool nommu_gpuaddr_in_range(struct kgsl_pagetable *pagetable,
-		uint64_t gpuaddr)
+		uint64_t gpuaddr, uint64_t size)
 {
 	return (gpuaddr != 0) ? true : false;
 }
